@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SIGMA – Mark attendance</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+ .clock{font-size:40px;font-weight:800;font-variant-numeric:tabular-nums;text-align:center}
+ .date{text-align:center;color:var(--muted);margin-bottom:12px}
+ .cam{position:relative;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3}
+ .cam video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+ .cam .ph{position:absolute;inset:0;display:grid;place-items:center;color:#9aa;padding:20px;text-align:center;font-size:14px}
+ .geo{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+ #act{font-size:18px;padding:16px;margin-top:14px}
+</style></head>
+<body><div class="wrap">
+  <div class="top">
+    <div class="brand">SIG<b>M</b>A</div>
+    <div class="who"><span id="nm"></span><br><a href="#" id="out" style="color:var(--accent)">Log out</a>
+      <span id="adm" style="display:none"> · <a href="/home" style="color:var(--accent)">Admin</a></span></div>
+  </div>
+
+  <div class="card">
+    <div class="clock" id="clk">--:--:--</div><div class="date" id="dt"></div>
+    <div class="geo">
+      <span class="badge" id="gb">Locating…</span>
+      <span class="muted" id="gd" style="font-size:13px"></span>
+    </div>
+    <div class="cam"><video id="v" autoplay playsinline muted></video><div class="ph" id="ph">Starting camera…</div></div>
+    <button class="block" id="act" disabled>Punch IN</button>
+    <div class="err" id="msg" role="status"></div>
+  </div>
+
+  <div class="card"><h2>Today</h2>
+    <div class="scroll"><table><thead><tr><th>Type</th><th>Time</th><th>Distance</th></tr></thead><tbody id="tb"></tbody></table></div>
+    <p class="muted" id="none" style="margin:10px 0 0">No punches yet today.</p>
+  </div>
+</div>
+<canvas id="cv" style="display:none"></canvas>
+<script>
+const $=id=>document.getElementById(id);
+let st=null, pos=null, camOK=false;
+
+async function api(path,opt){const r=await fetch(path,opt); if(r.status===401){location.href='/';throw 0} return [r,await r.json()]}
+
+function tick(){const d=new Date();
+  $('clk').textContent=d.toLocaleTimeString('en-IN',{hour12:true,timeZone:'Asia/Kolkata'});
+  $('dt').textContent=d.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric',timeZone:'Asia/Kolkata'});}
+setInterval(tick,1000);tick();
+
+function dist(a,b,c,d){const R=6371000,t=x=>x*Math.PI/180,
+  h=Math.sin(t(c-a)/2)**2+Math.cos(t(a))*Math.cos(t(c))*Math.sin(t(d-b)/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
+
+function render(){
+  if(!st)return;
+  $('nm').textContent=st.name+' · '+(st.designation||'');
+  if(st.role==='admin')$('adm').style.display='inline';
+  $('act').textContent='Punch '+st.next_action+' now';
+  const g=st.geofence;
+  if(!g){$('gb').textContent='Office location not set';$('gb').className='badge out';$('gd').textContent='Ask the admin to set the geofence.'}
+  else if(!pos){$('gb').textContent='Locating…';$('gb').className='badge'}
+  else{const d=dist(pos.lat,pos.lng,g.lat,g.lng),inside=d<=g.radius_m;
+    $('gb').textContent=inside?'Inside office area':'Outside office area';$('gb').className='badge '+(inside?'in':'out');
+    $('gd').textContent=Math.round(d)+' m from centre (allowed '+Math.round(g.radius_m)+' m) · GPS ±'+Math.round(pos.acc)+' m';}
+  $('act').disabled=!(camOK&&pos&&g);
+  $('tb').innerHTML=st.today.map(r=>`<tr><td><span class="badge ${r.kind==='IN'?'in':'out'}">${r.kind}</span></td><td>${r.punched_at.slice(11)}</td><td>${Math.round(r.distance_m)} m</td></tr>`).join('');
+  $('none').style.display=st.today.length?'none':'block';
+}
+async function load(){[,st]=await api('/api/status');render()}
+
+// camera
+(async()=>{
+  try{const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:960}},audio:false});
+    $('v').srcObject=s;$('ph').style.display='none';camOK=true;render();
+  }catch(e){$('ph').textContent='Camera blocked. Allow camera access (page must be opened via HTTPS or localhost).'}
+})();
+// location
+if(navigator.geolocation){
+  navigator.geolocation.watchPosition(p=>{pos={lat:p.coords.latitude,lng:p.coords.longitude,acc:p.coords.accuracy};render()},
+    e=>{$('gb').textContent='Location blocked';$('gb').className='badge out';$('gd').textContent='Allow location access to mark attendance.'},
+    {enableHighAccuracy:true,maximumAge:5000,timeout:20000});
+}else{$('gb').textContent='No GPS support'}
+
+$('act').onclick=async()=>{
+  $('act').disabled=true;$('msg').className='err';$('msg').textContent='';
+  const v=$('v'),c=$('cv'),w=Math.min(640,v.videoWidth),h=Math.round(w*v.videoHeight/v.videoWidth);
+  c.width=w;c.height=h;const x=c.getContext('2d');x.drawImage(v,0,0,w,h);
+  // stamp time + coordinates onto the photo
+  const stamp=new Date().toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})+'  '+pos.lat.toFixed(5)+', '+pos.lng.toFixed(5);
+  x.fillStyle='rgba(0,0,0,.55)';x.fillRect(0,h-24,w,24);x.fillStyle='#fff';x.font='13px sans-serif';x.fillText(stamp,8,h-8);
+  const photo=c.toDataURL('image/jpeg',0.72);
+  const [r,d]=await api('/api/punch',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({kind:st.next_action,photo,lat:pos.lat,lng:pos.lng,accuracy:pos.acc})});
+  if(r.ok){$('msg').className='err okmsg';$('msg').textContent='Punched '+d.kind+' at '+d.time+' ✓';await load()}
+  else{$('msg').textContent=d.error||'Failed';render()}
+};
+$('out').onclick=async e=>{e.preventDefault();await fetch('/api/logout',{method:'POST'});location.href='/'};
+load();setInterval(load,60000);
+</script></body></html>

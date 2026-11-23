@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SIGMA – Admin</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body><div class="wrap">
+  <div class="top">
+    <div class="brand">SIG<b>M</b>A <span class="muted" style="font-size:13px;letter-spacing:.05em">ADMIN</span></div>
+    <div class="who"><span id="nm"></span><br><a href="/punch" style="color:var(--accent)">Mark my attendance</a> · <a href="#" id="out" style="color:var(--accent)">Log out</a></div>
+  </div>
+  <div class="tabs">
+    <button class="on" data-t="att">Attendance</button>
+    <button data-t="geo">Geofence</button>
+    <button data-t="emp">Employees DB</button>
+  </div>
+
+  <div id="att" class="card">
+    <div class="row" style="margin-bottom:12px"><h2 style="margin:0">Attendance on</h2><input type="date" id="day" style="width:auto"></div>
+    <div class="scroll"><table><thead><tr><th>Photo</th><th>Employee</th><th>Type</th><th>Time</th><th>Distance</th><th>Map</th></tr></thead><tbody id="atb"></tbody></table></div>
+    <p class="muted" id="anone" style="display:none">No punches on this date.</p>
+  </div>
+
+  <div id="geo" class="card" style="display:none">
+    <h2>Geofence centre</h2>
+    <p class="muted" style="margin-top:0">Stand at the office and tap the button – your current location becomes the centre. Employees can punch only within the radius.</p>
+    <div id="gcur" style="margin-bottom:10px"></div>
+    <label for="rad">Radius (metres)</label><input id="rad" type="number" min="20" max="5000" value="100" style="max-width:160px">
+    <div class="row" style="margin-top:14px">
+      <button id="gset">Use my current location as centre</button>
+    </div>
+    <div class="err" id="gmsg"></div>
+  </div>
+
+  <div id="emp" class="card" style="display:none">
+    <h2>Employees</h2>
+    <div class="scroll"><table><thead><tr><th>#</th><th>Name</th><th>Mobile</th><th>Role</th><th>Handset</th><th>Network</th><th>IPv4</th><th>IMEI</th></tr></thead><tbody id="etb"></tbody></table></div>
+  </div>
+</div>
+<div class="modal" id="md"><img id="mi" alt="Attendance photo"></div>
+<script>
+const $=id=>document.getElementById(id);
+async function api(p,o){const r=await fetch(p,o);if(r.status===401){location.href='/';throw 0}return [r,await r.json()]}
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  ['att','geo','emp'].forEach(t=>$(t).style.display=t===b.dataset.t?'block':'none');
+});
+$('md').onclick=()=>$('md').classList.remove('on');
+
+async function loadAtt(){
+  const [,d]=await api('/api/admin/attendance?date='+$('day').value);
+  $('atb').innerHTML=d.rows.map(r=>`<tr>
+    <td><img class="thumb" src="/photos/${esc(r.photo)}" data-p="${esc(r.photo)}" alt=""></td>
+    <td>${esc(r.name)}<br><span class="muted" style="font-size:12px">${esc(r.designation)}</span></td>
+    <td><span class="badge ${r.kind==='IN'?'in':'out'}">${r.kind}</span></td>
+    <td>${esc(r.punched_at.slice(11))}</td><td>${Math.round(r.distance_m)} m</td>
+    <td><a style="color:var(--accent)" target="_blank" rel="noopener" href="https://maps.google.com/?q=${r.lat},${r.lng}">view</a></td></tr>`).join('');
+  $('anone').style.display=d.rows.length?'none':'block';
+  document.querySelectorAll('.thumb').forEach(i=>i.onclick=()=>{$('mi').src='/photos/'+i.dataset.p;$('md').classList.add('on')});
+}
+async function loadGeo(){
+  const [,g]=await api('/api/admin/geofence');
+  $('gcur').innerHTML=g?`Current centre: <b>${g.lat.toFixed(6)}, ${g.lng.toFixed(6)}</b> · radius <b>${g.radius_m} m</b>`:'<span style="color:var(--bad)">Not set yet – employees cannot punch until you set it.</span>';
+  if(g)$('rad').value=g.radius_m;
+}
+async function loadEmp(){
+  const [,rows]=await api('/api/admin/employees');
+  $('etb').innerHTML=rows.map(r=>`<tr><td>${r.id}</td><td>${esc(r.name)}</td><td>${esc(r.mobile)}</td><td>${esc(r.designation)}</td><td>${esc(r.handset)}</td><td>${esc(r.network)}</td><td>${esc(r.ip_v4)}</td><td>${esc(r.imei)}</td></tr>`).join('');
+}
+$('gset').onclick=()=>{
+  $('gmsg').className='err';$('gmsg').textContent='Getting GPS fix…';
+  navigator.geolocation.getCurrentPosition(async p=>{
+    const [r,d]=await api('/api/admin/geofence',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({lat:p.coords.latitude,lng:p.coords.longitude,radius_m:$('rad').value})});
+    if(r.ok){$('gmsg').className='err okmsg';$('gmsg').textContent='Saved ✓ (GPS accuracy ±'+Math.round(p.coords.accuracy)+' m)';loadGeo()}
+    else $('gmsg').textContent=d.error;
+  },e=>{$('gmsg').textContent='Could not get location. Allow location access.'},{enableHighAccuracy:true,timeout:20000,maximumAge:0});
+};
+$('out').onclick=async e=>{e.preventDefault();await fetch('/api/logout',{method:'POST'});location.href='/'};
+$('day').value=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Kolkata'});
+$('day').onchange=loadAtt;
+api('/api/me').then(([,m])=>$('nm').textContent=m.name);
+loadAtt();loadGeo();loadEmp();
+</script></body></html>
